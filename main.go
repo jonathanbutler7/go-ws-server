@@ -2,11 +2,10 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/net/websocket"
 	"io"
 	"net/http"
 	"time"
-
-	"golang.org/x/net/websocket"
 )
 
 type Server struct {
@@ -28,7 +27,7 @@ func (s *Server) handleWsOrderbook(ws *websocket.Conn) {
 	}
 }
 
-func (s *Server) handleWs(ws *websocket.Conn) {
+func (s *Server) handleWs(ws *websocket.Conn, token string) {
 	fmt.Println("new incoming connection from client: ", ws.RemoteAddr())
 
 	s.conns[ws] = true
@@ -64,7 +63,12 @@ func (s *Server) broadcast(b []byte) {
 
 func main() {
 	server := NewServer()
-	http.Handle("/ws", websocket.Handler(server.handleWs))
+	http.Handle("/ws/", websocket.Handler(func(ws *websocket.Conn) {
+		query := ws.Request().URL.Query()
+		token := query.Get("token")
+		fmt.Printf("token %s\n", token)
+		server.handleWs(ws, token)
+	}))
 	http.Handle("/orderbookfeed", websocket.Handler(server.handleWsOrderbook))
 	http.ListenAndServe(":3000", nil)
 }
