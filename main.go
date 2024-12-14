@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,7 +33,6 @@ func NewServer() *Server {
 	}
 }
 
-// adding way too many users, adding way too many conncections, rooms are good
 func (s *Server) handleWs(ws *websocket.Conn, userId, roomId string) {
 	s.addUserToRoom(userId, roomId)
 	s.conns[ws] = userId
@@ -40,14 +40,20 @@ func (s *Server) handleWs(ws *websocket.Conn, userId, roomId string) {
 }
 
 func (s *Server) addUserToRoom(userId, roomId string) {
+	// if we don't have the room that was created, add it
 	if _, exists := s.chatRooms[roomId]; !exists {
 		fmt.Println("room doesn't exist, create new: ", roomId)
 		s.chatRooms[roomId] = make(map[string]struct{})
 	}
-	s.chatRooms[roomId][userId] = struct{}{}
+
+	// if the user id is not in the users list, add it
 	if _, exists := s.users[userId]; !exists {
 		s.users[userId] = append(s.users[userId], roomId)
 	}
+
+	s.chatRooms[roomId][userId] = struct{}{}
+	// we already have the room, just add the user to it
+	fmt.Println(s.chatRooms)
 }
 
 func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
@@ -61,12 +67,31 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 			fmt.Println("read error: ", err)
 			continue
 		}
+
 		msg := buf[:n]
-		s.broadcast(msg, roomId)
+		var request map[string]string
+		if err := json.Unmarshal(msg, &request); err != nil {
+			fmt.Println("Error unmarshalling message:", err)
+			s.broadcastToRoom(msg, roomId)
+			continue
+		}
+		switch request["action"] {
+		case "join":
+			if _, exists := s.chatRooms[request["roomId"]][request["userId"]]; !exists {
+				s.addUserToRoom(request["userId"], request["roomId"])
+				joinMessage := fmt.Sprintf("%s has joined the room", request["userId"])
+				s.broadcastToRoom([]byte(joinMessage), request["roomId"])
+			} else {
+				fmt.Println("UserId already exists, no action needed.")
+			}
+		default:
+			s.broadcastToRoom(msg, roomId)
+		}
+
 	}
 }
 
-func (s *Server) broadcast(b []byte, roomId string) {
+func (s *Server) broadcastToRoom(b []byte, roomId string) {
 	if listOfUsers, exists := s.chatRooms[roomId]; exists {
 		fmt.Println("found room", roomId, "has users", listOfUsers)
 		for user := range listOfUsers {
