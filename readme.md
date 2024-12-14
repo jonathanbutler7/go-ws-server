@@ -11,7 +11,7 @@ go run main.go
 to see the "chat" work, open up 2 consoles in a browser and run
 
 ```js
-let socket = new WebSocket("ws://localhost:3000/ws");
+let socket = new WebSocket("ws://localhost:3000/ws/?userID=123&roomId=234");
 socket.onmessage = (event) => console.log(event.data);
 // use socket.send to send chat messages between the two connections
 socket.send("oh hello");
