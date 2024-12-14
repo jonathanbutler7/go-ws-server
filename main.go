@@ -37,6 +37,7 @@ func (s *Server) handleWs(ws *websocket.Conn, userId, roomId string) {
 	s.addUserToRoom(userId, roomId)
 	s.conns[ws] = userId
 	s.readLoop(ws, roomId)
+	fmt.Println("chatRooms", s.chatRooms)
 }
 
 func (s *Server) addUserToRoom(userId, roomId string) {
@@ -54,6 +55,10 @@ func (s *Server) addUserToRoom(userId, roomId string) {
 	s.chatRooms[roomId][userId] = struct{}{}
 	// we already have the room, just add the user to it
 	fmt.Println(s.chatRooms)
+}
+
+func (s *Server) removeUserFromRoom(userId, roomId string) {
+	delete(s.chatRooms[roomId], userId)
 }
 
 func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
@@ -77,12 +82,19 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 		}
 		switch request["action"] {
 		case "join":
-			if _, exists := s.chatRooms[request["roomId"]][request["userId"]]; !exists {
-				s.addUserToRoom(request["userId"], request["roomId"])
+			fmt.Println("room with users",s.chatRooms[request["roomId"]])
+			if _, exists := s.chatRooms[request["roomId"]][request["userId"]]; exists {
+				fmt.Sprintf("User: %s already exists in room: %s, no action needed.", request["userId"], request["roomId"])
+			} else {
 				joinMessage := fmt.Sprintf("%s has joined the room", request["userId"])
 				s.broadcastToRoom([]byte(joinMessage), request["roomId"])
-			} else {
-				fmt.Println("UserId already exists, no action needed.")
+				s.addUserToRoom(request["userId"], request["roomId"])
+			}
+		case "leave":
+			if _, exists := s.chatRooms[request["roomId"]][request["userId"]]; exists {
+				s.removeUserFromRoom(request["userId"], request["roomId"])
+				leaveMessage := fmt.Sprintf("%s has left the room", request["userId"])
+				s.broadcastToRoom([]byte(leaveMessage), request["roomId"])
 			}
 		default:
 			s.broadcastToRoom(msg, roomId)
@@ -93,7 +105,7 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 
 func (s *Server) broadcastToRoom(b []byte, roomId string) {
 	if listOfUsers, exists := s.chatRooms[roomId]; exists {
-		fmt.Println("found room", roomId, "has users", listOfUsers)
+		// fmt.Println("found room", roomId, "has users", listOfUsers)
 		for user := range listOfUsers {
 			for conn, id := range s.conns {
 				if id == user {
