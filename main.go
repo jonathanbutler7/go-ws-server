@@ -57,8 +57,23 @@ func (s *Server) addUserToRoom(userId, roomId string) {
 	fmt.Println(s.chatRooms)
 }
 
-func (s *Server) removeUserFromRoom(userId, roomId string) {
-	delete(s.chatRooms[roomId], userId)
+func (s *Server) joinRoom(roomId, userId string) {
+	fmt.Println("room with users", s.chatRooms[roomId])
+	if _, exists := s.chatRooms[roomId][userId]; exists {
+		fmt.Printf("User: %s already exists in room: %s, no action needed.", userId, roomId)
+	} else {
+		joinMessage := fmt.Sprintf("%s joined room %s", userId, roomId)
+		s.broadcastToRooms([]byte(joinMessage), roomId)
+		s.addUserToRoom(userId, roomId)
+	}
+}
+
+func (s *Server) leaveRoom(roomId, userId string) {
+	if _, exists := s.chatRooms[roomId][userId]; exists {
+		leaveMessage := fmt.Sprintf("%s left room %s", userId, roomId)
+		s.broadcastToRooms([]byte(leaveMessage), roomId)
+		delete(s.chatRooms[roomId], userId)
+	}
 }
 
 func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
@@ -77,33 +92,22 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 		var request map[string]string
 		if err := json.Unmarshal(msg, &request); err != nil {
 			fmt.Println("Error unmarshalling message:", err)
-			s.broadcastToRoom(msg, roomId)
+			s.broadcastToRooms(msg, roomId)
 			continue
 		}
 		switch request["action"] {
 		case "join":
-			fmt.Println("room with users",s.chatRooms[request["roomId"]])
-			if _, exists := s.chatRooms[request["roomId"]][request["userId"]]; exists {
-				fmt.Sprintf("User: %s already exists in room: %s, no action needed.", request["userId"], request["roomId"])
-			} else {
-				joinMessage := fmt.Sprintf("%s has joined the room", request["userId"])
-				s.broadcastToRoom([]byte(joinMessage), request["roomId"])
-				s.addUserToRoom(request["userId"], request["roomId"])
-			}
+			s.joinRoom(request["roomId"], request["userId"])
 		case "leave":
-			if _, exists := s.chatRooms[request["roomId"]][request["userId"]]; exists {
-				s.removeUserFromRoom(request["userId"], request["roomId"])
-				leaveMessage := fmt.Sprintf("%s has left the room", request["userId"])
-				s.broadcastToRoom([]byte(leaveMessage), request["roomId"])
-			}
+			s.leaveRoom(request["roomId"], request["userId"])
 		default:
-			s.broadcastToRoom(msg, roomId)
+			s.broadcastToRooms(msg, roomId)
 		}
 
 	}
 }
 
-func (s *Server) broadcastToRoom(b []byte, roomId string) {
+func (s *Server) broadcastToRooms(b []byte, roomId string) {
 	if listOfUsers, exists := s.chatRooms[roomId]; exists {
 		// fmt.Println("found room", roomId, "has users", listOfUsers)
 		for user := range listOfUsers {
