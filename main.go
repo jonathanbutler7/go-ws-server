@@ -10,16 +10,6 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-// conns:
-// ws1 -> userID1
-// ws2 -> userID2
-// chatRooms:
-// roomId1 -> {userID1, userID3}
-// roomId2 -> {userID2, userID1}
-// users:
-// userID1 -> [roomId1, roomId2]
-// userID2 -> [roomId2]
-
 type Server struct {
 	mu        sync.Mutex
 	chatRooms map[string]map[string]struct{} // roomID -> (userID -> empty struct)
@@ -75,7 +65,12 @@ func (s *Server) joinRoom(roomId, userId string) {
 		fmt.Printf("User: %s already exists in room: %s, no action needed.", userId, roomId)
 	} else {
 		joinMessage := fmt.Sprintf("%s joined room %s", userId, roomId)
-		s.broadcastToRoom(joinMessage, roomId)
+		message := Message{
+			Message: joinMessage,
+			Action:  "message",
+		}
+		jsonBytes, _ := json.Marshal(message)
+		s.broadcastToRoom(jsonBytes, roomId)
 		s.addUserToRoom(userId, roomId)
 	}
 }
@@ -84,7 +79,12 @@ func (s *Server) leaveRoom(roomId, userId string) {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
 		leaveMessage := fmt.Sprintf("%s left room %s", userId, roomId)
 		delete(s.chatRooms[roomId], userId)
-		s.broadcastToRoom(leaveMessage, roomId)
+		message := Message{
+			Message: leaveMessage,
+			Action:  "message",
+		}
+		jsonBytes, _ := json.Marshal(message)
+		s.broadcastToRoom(jsonBytes, roomId)
 	}
 }
 
@@ -106,19 +106,22 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 			fmt.Println("Error unmarshalling message:", err)
 			continue
 		}
-		// fmt.Println("hey msg", msg)
-		// fmt.Println("hey request", request)
 		switch request["action"] {
 		case "join":
 			s.joinRoom(request["roomId"], request["userId"])
 		case "leave":
 			s.leaveRoom(request["roomId"], request["userId"])
 		case "message":
-			// s.broadcastToRoom(request["message"], roomId)
-			// s.broadcastToRoom(msg, roomId)
-			s.broadcastToRoom(request["message"], roomId)
-		default:
-			// s.broadcastToRoom(msg, roomId)
+			message := Message{
+				Message: request["message"],
+				Action:  "message",
+			}
+			jsonBytes, err := json.Marshal(message)
+			if err != nil {
+				fmt.Println("Error marshaling struct:", err)
+				return
+			}
+			s.broadcastToRoom(jsonBytes, roomId)
 		}
 	}
 }
@@ -128,7 +131,7 @@ type Message struct {
 	Action  string `json:"action"`
 }
 
-func (s *Server) broadcastToRoom(msg, roomId string) {
+func (s *Server) broadcastToRoom(b []byte, roomId string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if listOfUsers, exists := s.chatRooms[roomId]; exists {
@@ -136,17 +139,7 @@ func (s *Server) broadcastToRoom(msg, roomId string) {
 			for conn, id := range s.conns {
 				if id == user {
 					go func(ws *websocket.Conn) {
-						message := Message{
-							Message: msg,
-							Action:  "message",
-						}
-						jsonBytes, err := json.Marshal(message)
-						if err != nil {
-							fmt.Println("Error marshaling struct:", err)
-							return
-						}
-						fmt.Println(msg)
-						if _, err := ws.Write(jsonBytes); err != nil {
+						if _, err := ws.Write(b); err != nil {
 							fmt.Println("error", err)
 						}
 					}(conn)
