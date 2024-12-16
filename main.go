@@ -64,10 +64,9 @@ func (s *Server) joinRoom(roomId, userId string) {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
 		fmt.Printf("User: %s already exists in room: %s, no action needed.", userId, roomId)
 	} else {
-		joinMessage := fmt.Sprintf("%s joined room %s", userId, roomId)
 		message := Message{
-			Content: joinMessage,
-			Type:    "message",
+			Content: fmt.Sprintf("%s joined room %s", userId, roomId),
+			Type:    "join",
 		}
 		jsonBytes, _ := json.Marshal(message)
 		s.broadcastToRoom(jsonBytes, roomId)
@@ -77,15 +76,27 @@ func (s *Server) joinRoom(roomId, userId string) {
 
 func (s *Server) leaveRoom(roomId, userId string) {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
-		leaveMessage := fmt.Sprintf("%s left room %s", userId, roomId)
 		delete(s.chatRooms[roomId], userId)
 		message := Message{
-			Content: leaveMessage,
-			Type:    "message",
+			Content: fmt.Sprintf("%s left room %s", userId, roomId),
+			Type:    "leave",
 		}
 		jsonBytes, _ := json.Marshal(message)
 		s.broadcastToRoom(jsonBytes, roomId)
 	}
+}
+
+func (s *Server) sendMessage(content, roomId string) {
+	message := Message{
+		Content: content,
+		Type:    "message",
+	}
+	jsonBytes, err := json.Marshal(message)
+	if err != nil {
+		fmt.Println("Error marshaling struct:", err)
+		return
+	}
+	s.broadcastToRoom(jsonBytes, roomId)
 }
 
 func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
@@ -112,16 +123,17 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 		case "leave":
 			s.leaveRoom(request["roomId"], request["userId"])
 		case "message":
-			message := Message{
-				Content: request["content"],
-				Type:    "message",
-			}
-			jsonBytes, err := json.Marshal(message)
-			if err != nil {
-				fmt.Println("Error marshaling struct:", err)
-				return
-			}
-			s.broadcastToRoom(jsonBytes, roomId)
+			s.sendMessage(request["content"], roomId)
+			// message := Message{
+			// 	Content: request["content"],
+			// 	Type:    "message",
+			// }
+			// jsonBytes, err := json.Marshal(message)
+			// if err != nil {
+			// 	fmt.Println("Error marshaling struct:", err)
+			// 	return
+			// }
+			// s.broadcastToRoom(jsonBytes, roomId)
 		}
 	}
 }
