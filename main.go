@@ -17,30 +17,17 @@ type Server struct {
 	conns     map[*websocket.Conn]string     // WebSocket connection -> userID
 }
 
+type Message struct {
+	Content string `json:"content"`
+	Type    string `json:"type"`
+}
+
 func NewServer() *Server {
 	return &Server{
 		chatRooms: make(map[string]map[string]struct{}),
 		users:     make(map[string][]string),
 		conns:     make(map[*websocket.Conn]string),
 	}
-}
-
-func (s *Server) handleWs(ws *websocket.Conn, userId, roomId string) {
-	s.addUserToRoom(userId, roomId)
-	s.conns[ws] = userId
-	defer func() {
-		s.mu.Lock()
-		// remove ws connection
-		delete(s.conns, ws)
-		// remove user from chat room
-		for _, room := range s.users[userId] {
-			delete(s.chatRooms[room], userId)
-		}
-		// remove user from s.users
-		delete(s.users, userId)
-		s.mu.Unlock()
-	}()
-	s.readLoop(ws, roomId)
 }
 
 func (s *Server) addUserToRoom(userId, roomId string) {
@@ -68,7 +55,11 @@ func (s *Server) joinRoom(roomId, userId string) {
 			Content: fmt.Sprintf("%s joined room %s", userId, roomId),
 			Type:    "join",
 		}
-		jsonBytes, _ := json.Marshal(message)
+		jsonBytes, err := json.Marshal(message)
+		if err != nil {
+			fmt.Println("Error marshaling struct:", err)
+			return
+		}
 		s.broadcastToRoom(jsonBytes, roomId)
 		s.addUserToRoom(userId, roomId)
 	}
@@ -81,7 +72,11 @@ func (s *Server) leaveRoom(roomId, userId string) {
 			Content: fmt.Sprintf("%s left room %s", userId, roomId),
 			Type:    "leave",
 		}
-		jsonBytes, _ := json.Marshal(message)
+		jsonBytes, err := json.Marshal(message)
+		if err != nil {
+			fmt.Println("Error marshaling struct:", err)
+			return
+		}
 		s.broadcastToRoom(jsonBytes, roomId)
 	}
 }
@@ -97,6 +92,24 @@ func (s *Server) sendMessage(content, roomId string) {
 		return
 	}
 	s.broadcastToRoom(jsonBytes, roomId)
+}
+
+func (s *Server) broadcastToRoom(b []byte, roomId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if listOfUsers, exists := s.chatRooms[roomId]; exists {
+		for user := range listOfUsers {
+			for conn, id := range s.conns {
+				if id == user {
+					go func(ws *websocket.Conn) {
+						if _, err := ws.Write(b); err != nil {
+							fmt.Println("error", err)
+						}
+					}(conn)
+				}
+			}
+		}
+	}
 }
 
 func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
@@ -128,27 +141,22 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 	}
 }
 
-type Message struct {
-	Content string `json:"content"`
-	Type    string `json:"type"`
-}
-
-func (s *Server) broadcastToRoom(b []byte, roomId string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if listOfUsers, exists := s.chatRooms[roomId]; exists {
-		for user := range listOfUsers {
-			for conn, id := range s.conns {
-				if id == user {
-					go func(ws *websocket.Conn) {
-						if _, err := ws.Write(b); err != nil {
-							fmt.Println("error", err)
-						}
-					}(conn)
-				}
-			}
+func (s *Server) handleWs(ws *websocket.Conn, userId, roomId string) {
+	s.addUserToRoom(userId, roomId)
+	s.conns[ws] = userId
+	defer func() {
+		s.mu.Lock()
+		// remove ws connection
+		delete(s.conns, ws)
+		// remove user from chat room
+		for _, room := range s.users[userId] {
+			delete(s.chatRooms[room], userId)
 		}
-	}
+		// remove user from s.users
+		delete(s.users, userId)
+		s.mu.Unlock()
+	}()
+	s.readLoop(ws, roomId)
 }
 
 func main() {
