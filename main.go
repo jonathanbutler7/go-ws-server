@@ -124,16 +124,6 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 			s.leaveRoom(request["roomId"], request["userId"])
 		case "message":
 			s.sendMessage(request["content"], roomId)
-			// message := Message{
-			// 	Content: request["content"],
-			// 	Type:    "message",
-			// }
-			// jsonBytes, err := json.Marshal(message)
-			// if err != nil {
-			// 	fmt.Println("Error marshaling struct:", err)
-			// 	return
-			// }
-			// s.broadcastToRoom(jsonBytes, roomId)
 		}
 	}
 }
