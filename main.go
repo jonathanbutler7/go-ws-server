@@ -66,8 +66,8 @@ func (s *Server) joinRoom(roomId, userId string) {
 	} else {
 		joinMessage := fmt.Sprintf("%s joined room %s", userId, roomId)
 		message := Message{
-			Message: joinMessage,
-			Action:  "message",
+			Content: joinMessage,
+			Type:    "message",
 		}
 		jsonBytes, _ := json.Marshal(message)
 		s.broadcastToRoom(jsonBytes, roomId)
@@ -80,8 +80,8 @@ func (s *Server) leaveRoom(roomId, userId string) {
 		leaveMessage := fmt.Sprintf("%s left room %s", userId, roomId)
 		delete(s.chatRooms[roomId], userId)
 		message := Message{
-			Message: leaveMessage,
-			Action:  "message",
+			Content: leaveMessage,
+			Type:    "message",
 		}
 		jsonBytes, _ := json.Marshal(message)
 		s.broadcastToRoom(jsonBytes, roomId)
@@ -106,15 +106,15 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 			fmt.Println("Error unmarshalling message:", err)
 			continue
 		}
-		switch request["action"] {
+		switch request["type"] {
 		case "join":
 			s.joinRoom(request["roomId"], request["userId"])
 		case "leave":
 			s.leaveRoom(request["roomId"], request["userId"])
 		case "message":
 			message := Message{
-				Message: request["message"],
-				Action:  "message",
+				Content: request["content"],
+				Type:    "message",
 			}
 			jsonBytes, err := json.Marshal(message)
 			if err != nil {
@@ -127,8 +127,8 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 }
 
 type Message struct {
-	Message string `json:"message"`
-	Action  string `json:"action"`
+	Content string `json:"content"`
+	Type    string `json:"type"`
 }
 
 func (s *Server) broadcastToRoom(b []byte, roomId string) {
