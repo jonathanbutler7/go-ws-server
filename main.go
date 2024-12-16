@@ -14,8 +14,9 @@ type Server struct {
 	mu        sync.Mutex
 	chatRooms map[string]map[string]struct{} // roomID -> (userID -> empty struct)
 	users     map[string][]string            // userID -> list of roomIDs
-	conns     map[*websocket.Conn]string     // WebSocket connection -> userID
+	conns     map[string]*websocket.Conn     // WebSocket connection -> userID // probably reverse this so the key is userID and the value is the ws connection
 }
+// how does one user have multiple ws connected?
 
 type Message struct {
 	Content string `json:"content"`
@@ -26,8 +27,16 @@ func NewServer() *Server {
 	return &Server{
 		chatRooms: make(map[string]map[string]struct{}),
 		users:     make(map[string][]string),
-		conns:     make(map[*websocket.Conn]string),
+		conns:     make(map[string]*websocket.Conn),
 	}
+}
+
+// "*" makes it a pointer receiver
+// makes it so we modify the original connections map, not a copy
+func (s *Server) addConnection(ws *websocket.Conn, userId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conns[userId] = ws
 }
 
 func (s *Server) addUserToRoom(userId, roomId string) {
@@ -99,7 +108,7 @@ func (s *Server) broadcastToRoom(b []byte, roomId string) {
 	defer s.mu.Unlock()
 	if listOfUsers, exists := s.chatRooms[roomId]; exists {
 		for user := range listOfUsers {
-			for conn, id := range s.conns {
+			for id, conn := range s.conns {
 				if id == user {
 					go func(ws *websocket.Conn) {
 						if _, err := ws.Write(b); err != nil {
@@ -112,6 +121,9 @@ func (s *Server) broadcastToRoom(b []byte, roomId string) {
 	}
 }
 
+type ContentType string
+const JoinRoomType ContentType = "join"
+
 func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 	buf := make([]byte, 1024)
 	for {
@@ -120,16 +132,27 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 			if err == io.EOF {
 				break
 			}
+			// could be good to write something to the client here
 			fmt.Println("read error: ", err)
 			continue
 		}
 
 		msg := buf[:n]
+		
+
+		// var request struct {
+		// 	Type    ContentType `json:"type"`
+		// 	Content interface{} `json:"content"`
+		// }
+		// type JoinRoomContent struct {
+		// 	RoomIds []string `json:"roomIds"`
+		// }
 		var request map[string]string
 		if err := json.Unmarshal(msg, &request); err != nil {
 			fmt.Println("Error unmarshalling message:", err)
 			continue
 		}
+		// switch request.Type {
 		switch request["type"] {
 		case "join":
 			s.joinRoom(request["roomId"], request["userId"])
@@ -141,13 +164,30 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 	}
 }
 
-func (s *Server) handleWs(ws *websocket.Conn, userId, roomId string) {
+func (s *Server) handleWs(ws *websocket.Conn) {
+	query := ws.Request().URL.Query()
+	userId := query.Get("userId")
+	roomId := query.Get("roomId")
+	// validation logic for not having userId/roomId
+	if userId == "" || roomId == "" {
+		// you can only attempt to push a message down (dunno if that will work), or shut down the connection
+		// maybe do both
+	}
 	s.addUserToRoom(userId, roomId)
-	s.conns[ws] = userId
+	// go isn't async, it's concurrent (switching between 2 threads quickly)
+	// go will panic if multiple go routines accessing the map at the same time
+	// s.conns[ws] = userId
+	// adding the lock/unlock makes this race-condition-safe
+	s.addConnection(ws, userId)
+	// defer is like a finally in try/catch
+	// defer func will still run even if there's a panic
+	// if read loop is above the defer func, it stops bubbling up
+	// useful if you have a panic that you're not sure why it's happening. would allow you to inspect closely
 	defer func() {
+		// will always run even if read loop freaks out
 		s.mu.Lock()
 		// remove ws connection
-		delete(s.conns, ws)
+		delete(s.conns, userId)
 		// remove user from chat room
 		for _, room := range s.users[userId] {
 			delete(s.chatRooms[room], userId)
@@ -161,11 +201,6 @@ func (s *Server) handleWs(ws *websocket.Conn, userId, roomId string) {
 
 func main() {
 	server := NewServer()
-	http.Handle("/ws/", websocket.Handler(func(ws *websocket.Conn) {
-		query := ws.Request().URL.Query()
-		userId := query.Get("userId")
-		roomId := query.Get("roomId")
-		server.handleWs(ws, userId, roomId)
-	}))
+	http.Handle("/ws/", websocket.Handler(server.handleWs))
 	http.ListenAndServe(":3000", nil)
 }

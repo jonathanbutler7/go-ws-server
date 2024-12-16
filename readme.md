@@ -10,7 +10,11 @@ then i expanded it to handle
 in the future i would like to add
 - a more efficient broadcast to room algorithm (avoid nested for loops)
 - store data somewhere
-- integrate nsq or kafka
+  - audit log in postgres would be a good place to start (easy)
+- integrate nsq or kafka (or redis)
+  - use case: multiple servers running
+  - straightforward solution: publish every message to nsq
+  - reason for message bus is horizontal scaling
 
 i built an html page ui to showcase the connections working in the browser
 - https://jonathanbutler7.github.io/
