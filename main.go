@@ -13,11 +13,15 @@ import (
 type Server struct {
 	mu        sync.Mutex
 	chatRooms map[string]map[string]struct{} // roomID -> (userID -> empty struct)
-	users     map[string][]string            // userID -> list of roomIDs
-	conns     map[string]*websocket.Conn     // WebSocket connection -> userID // probably reverse this so the key is userID and the value is the ws connection
+	users     map[string]userInfo            // userID -> userInfo
 }
-// how does one user have multiple ws connected?
 
+type userInfo struct {
+	rooms []string
+	conn  *websocket.Conn
+}
+
+// how does one user have multiple ws connected?
 type Message struct {
 	Content string `json:"content"`
 	Type    string `json:"type"`
@@ -26,8 +30,7 @@ type Message struct {
 func NewServer() *Server {
 	return &Server{
 		chatRooms: make(map[string]map[string]struct{}),
-		users:     make(map[string][]string),
-		conns:     make(map[string]*websocket.Conn),
+		users:     make(map[string]userInfo),
 	}
 }
 
@@ -36,27 +39,51 @@ func NewServer() *Server {
 func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.conns[userId] = ws
+
+	if _, exists := s.users[userId]; exists {
+		// If the user already exists, just update the connection, and keep existing rooms
+		user := s.users[userId]
+		user.conn = ws
+		s.users[userId] = user
+	} else {
+		// If this is a new user, create a new userInfo entry
+		s.users[userId] = userInfo{
+			conn:  ws,
+			rooms: []string{}, // Initialize with empty rooms slice
+		}
+	}
 }
 
-func (s *Server) addUserToRoom(userId, roomId string) {
+func (s *Server) addUserToRoom(userId, roomId string, ws *websocket.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// if we don't have the room that was created, add it
 	if _, exists := s.chatRooms[roomId]; !exists {
-		fmt.Println("room doesn't exist, create new: ", roomId)
 		s.chatRooms[roomId] = make(map[string]struct{})
 	}
-
-	// if the user id is not in the users list, add it
-	if _, exists := s.users[userId]; !exists {
-		s.users[userId] = append(s.users[userId], roomId)
-	}
-
-	// we already have the room, just add the user to it
 	s.chatRooms[roomId][userId] = struct{}{}
+
+	if user, exists := s.users[userId]; exists {
+		fmt.Printf("user %s does not exist\n", userId)
+		user.rooms = append(user.rooms, roomId)
+		// Ensure the connection is set if it's not already or if it's a new connection for this user
+        if user.conn == nil {
+			user.conn = ws
+        }
+		// user.conn = ws
+		s.users[userId] = user
+		} else {
+		fmt.Printf("user %s exists, do different thing\n", userId)
+		// If the user does not exist, create a new userInfo with this room
+		s.users[userId] = userInfo{
+			rooms: []string{roomId},
+			conn:  ws,
+		}
+	}
+	fmt.Println("UPDATED USERS", s.users)
 }
 
-func (s *Server) joinRoom(roomId, userId string) {
-	fmt.Println("room with users", s.chatRooms[roomId])
+func (s *Server) joinRoom(roomId, userId string, ws *websocket.Conn) {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
 		fmt.Printf("User: %s already exists in room: %s, no action needed.", userId, roomId)
 	} else {
@@ -69,8 +96,8 @@ func (s *Server) joinRoom(roomId, userId string) {
 			fmt.Println("Error marshaling struct:", err)
 			return
 		}
+		s.addUserToRoom(userId, roomId, ws)
 		s.broadcastToRoom(jsonBytes, roomId)
-		s.addUserToRoom(userId, roomId)
 	}
 }
 
@@ -106,22 +133,21 @@ func (s *Server) sendMessage(content, roomId string) {
 func (s *Server) broadcastToRoom(b []byte, roomId string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if listOfUsers, exists := s.chatRooms[roomId]; exists {
-		for user := range listOfUsers {
-			for id, conn := range s.conns {
-				if id == user {
-					go func(ws *websocket.Conn) {
-						if _, err := ws.Write(b); err != nil {
-							fmt.Println("error", err)
-						}
-					}(conn)
-				}
+	if roomUsers, exists := s.chatRooms[roomId]; exists {
+		for userId := range roomUsers {
+			if user, ok := s.users[userId]; ok && user.conn != nil {
+				go func(ws *websocket.Conn) {
+					if _, err := ws.Write(b); err != nil {
+						fmt.Println("error", err)
+					}
+				}(user.conn)
 			}
 		}
 	}
 }
 
 type ContentType string
+
 const JoinRoomType ContentType = "join"
 
 func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
@@ -138,7 +164,6 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 		}
 
 		msg := buf[:n]
-		
 
 		// var request struct {
 		// 	Type    ContentType `json:"type"`
@@ -155,7 +180,7 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 		// switch request.Type {
 		switch request["type"] {
 		case "join":
-			s.joinRoom(request["roomId"], request["userId"])
+			s.joinRoom(request["roomId"], request["userId"], ws)
 		case "leave":
 			s.leaveRoom(request["roomId"], request["userId"])
 		case "message":
@@ -172,8 +197,11 @@ func (s *Server) handleWs(ws *websocket.Conn) {
 	if userId == "" || roomId == "" {
 		// you can only attempt to push a message down (dunno if that will work), or shut down the connection
 		// maybe do both
+		ws.Write([]byte("Invalid user or room ID"))
+		ws.Close()
+		return
 	}
-	s.addUserToRoom(userId, roomId)
+	s.addUserToRoom(userId, roomId, ws)
 	// go isn't async, it's concurrent (switching between 2 threads quickly)
 	// go will panic if multiple go routines accessing the map at the same time
 	// s.conns[ws] = userId
@@ -186,15 +214,17 @@ func (s *Server) handleWs(ws *websocket.Conn) {
 	defer func() {
 		// will always run even if read loop freaks out
 		s.mu.Lock()
-		// remove ws connection
-		delete(s.conns, userId)
-		// remove user from chat room
-		for _, room := range s.users[userId] {
-			delete(s.chatRooms[room], userId)
-		}
-		// remove user from s.users
+		defer s.mu.Unlock()
+		// remove ws connection and user
 		delete(s.users, userId)
-		s.mu.Unlock()
+		// remove user from chat room
+		// check if user exists before attempting to access their rooms
+		if user, ok := s.users[userId]; ok {
+			for _, room := range user.rooms {
+				delete(s.chatRooms[room], userId)
+			}
+			delete(s.users, userId)
+		}
 	}()
 	s.readLoop(ws, roomId)
 }

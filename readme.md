@@ -8,13 +8,13 @@ then i expanded it to handle
 - different websocket message types
 
 in the future i would like to add
-- a more efficient broadcast to room algorithm (avoid nested for loops)
-- store data somewhere
-  - audit log in postgres would be a good place to start (easy)
-- integrate nsq or kafka (or redis)
-  - use case: multiple servers running
-  - straightforward solution: publish every message to nsq
-  - reason for message bus is horizontal scaling
+- [x] a more efficient broadcast to room algorithm (avoid nested for loops)
+- [ ] store data somewhere
+  - [ ] audit log in postgres would be a good place to start (easy)
+- [ ] integrate nsq or kafka (or redis)
+  - [ ] use case: multiple servers running
+  - [ ] straightforward solution: publish every message to nsq
+  - [ ] reason for message bus is horizontal scaling
 
 i built an html page ui to showcase the connections working in the browser
 - https://jonathanbutler7.github.io/
@@ -34,5 +34,8 @@ to see the "chat" work, open up 2 consoles in a browser and run
 let socket = new WebSocket("ws://localhost:3000/ws/?userId=123&roomId=A");
 socket.onmessage = (event) => console.log(event.data);
 // use socket.send to send chat messages between the two connections
-socket.send(JSON.stringify({type: "message",content: "oh hi"}))
+socket.send(JSON.stringify({ 
+  type: "message", 
+  content: "oh hi"
+}))
 ```
