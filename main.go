@@ -55,10 +55,10 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 }
 
 func (s *Server) addUserToRoom(userId, roomId string, ws *websocket.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	fmt.Printf("Gonna add user: %s to room: %s\n", userId, roomId)
-
+	// why is this lock causing so many problems?
+	// adding it here or in notifyRoomOfJoin makes it so that only the first user joins the room, and no subsequent room joins (on page load) work
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
 	// if we don't have the room that the user wants to join, add it
 	if _, exists := s.chatRooms[roomId]; !exists {
 		s.chatRooms[roomId] = make(map[string]struct{})
@@ -72,8 +72,6 @@ func (s *Server) addUserToRoom(userId, roomId string, ws *websocket.Conn) {
 			user.conn = ws
 		}
 		s.users[userId] = user
-		// why does adding this break everything?
-		// s.notifyRoomOfJoin(roomId, userId)
 	} else {
 		// If the user does not exist, create a new userInfo with this room
 		s.users[userId] = userInfo{
@@ -81,9 +79,13 @@ func (s *Server) addUserToRoom(userId, roomId string, ws *websocket.Conn) {
 			conn:  ws,
 		}
 	}
+	s.notifyRoomOfJoin(roomId, userId)
 }
 
 func (s *Server) notifyRoomOfJoin(roomId, userId string) {
+	// why is this lock causing problems?
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
 	message := Message{
 		Content: fmt.Sprintf("%s joined room %s", userId, roomId),
 		Type:    "join",
@@ -172,11 +174,9 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 			fmt.Println("Error unmarshalling message:", err)
 			continue
 		}
-		fmt.Println("~~~~~~~~running switch statement ", s.chatRooms)
 		// switch request.Type {
 		switch request["type"] {
 		case "join":
-			// s.joinRoom(request["roomId"], request["userId"], ws)
 			s.addUserToRoom(request["userId"], request["roomId"], ws)
 		case "leave":
 			s.leaveRoom(request["roomId"], request["userId"])
