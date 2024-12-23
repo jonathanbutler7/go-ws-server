@@ -64,42 +64,39 @@ func (s *Server) addUserToRoom(userId, roomId string, ws *websocket.Conn) {
 	s.chatRooms[roomId][userId] = struct{}{}
 
 	if user, exists := s.users[userId]; exists {
-		fmt.Printf("user %s does not exist\n", userId)
 		user.rooms = append(user.rooms, roomId)
 		// Ensure the connection is set if it's not already or if it's a new connection for this user
-        if user.conn == nil {
+		if user.conn == nil {
 			user.conn = ws
-        }
+		}
 		// user.conn = ws
 		s.users[userId] = user
-		} else {
-		fmt.Printf("user %s exists, do different thing\n", userId)
+	} else {
 		// If the user does not exist, create a new userInfo with this room
 		s.users[userId] = userInfo{
 			rooms: []string{roomId},
 			conn:  ws,
 		}
 	}
-	fmt.Println("UPDATED USERS", s.users)
 }
 
-func (s *Server) joinRoom(roomId, userId string, ws *websocket.Conn) {
-	if _, exists := s.chatRooms[roomId][userId]; exists {
-		fmt.Printf("User: %s already exists in room: %s, no action needed.", userId, roomId)
-	} else {
-		message := Message{
-			Content: fmt.Sprintf("%s joined room %s", userId, roomId),
-			Type:    "join",
-		}
-		jsonBytes, err := json.Marshal(message)
-		if err != nil {
-			fmt.Println("Error marshaling struct:", err)
-			return
-		}
-		s.addUserToRoom(userId, roomId, ws)
-		s.broadcastToRoom(jsonBytes, roomId)
-	}
-}
+// func (s *Server) joinRoom(roomId, userId string, ws *websocket.Conn) {
+// 	if _, exists := s.chatRooms[roomId][userId]; exists {
+// 		fmt.Printf("User: %s already exists in room: %s, no action needed.", userId, roomId)
+// 	} else {
+// 		message := Message{
+// 			Content: fmt.Sprintf("%s joined room %s", userId, roomId),
+// 			Type:    "join",
+// 		}
+// 		jsonBytes, err := json.Marshal(message)
+// 		if err != nil {
+// 			fmt.Println("Error marshaling struct:", err)
+// 			return
+// 		}
+// 		s.addUserToRoom(userId, roomId, ws)
+// 		s.broadcastToRoom(jsonBytes, roomId)
+// 	}
+// }
 
 func (s *Server) leaveRoom(roomId, userId string) {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
@@ -177,14 +174,16 @@ func (s *Server) readLoop(ws *websocket.Conn, roomId string) {
 			fmt.Println("Error unmarshalling message:", err)
 			continue
 		}
+		fmt.Println("~~~~~~~~running switch statement ", roomId, s.chatRooms)
 		// switch request.Type {
 		switch request["type"] {
 		case "join":
-			s.joinRoom(request["roomId"], request["userId"], ws)
+			// s.joinRoom(request["roomId"], request["userId"], ws)
+			s.addUserToRoom(request["userId"], request["roomId"], ws)
 		case "leave":
 			s.leaveRoom(request["roomId"], request["userId"])
 		case "message":
-			s.sendMessage(request["content"], roomId)
+			s.sendMessage(request["content"], request["destination"])
 		}
 	}
 }
@@ -194,14 +193,14 @@ func (s *Server) handleWs(ws *websocket.Conn) {
 	userId := query.Get("userId")
 	roomId := query.Get("roomId")
 	// validation logic for not having userId/roomId
-	if userId == "" || roomId == "" {
+	if userId == "" {
 		// you can only attempt to push a message down (dunno if that will work), or shut down the connection
 		// maybe do both
 		ws.Write([]byte("Invalid user or room ID"))
 		ws.Close()
 		return
 	}
-	s.addUserToRoom(userId, roomId, ws)
+	// s.addUserToRoom(userId, roomId, ws)
 	// go isn't async, it's concurrent (switching between 2 threads quickly)
 	// go will panic if multiple go routines accessing the map at the same time
 	// s.conns[ws] = userId
