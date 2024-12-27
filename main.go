@@ -54,7 +54,7 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 	}
 }
 
-func (s *Server) addUserToRoom(userId, roomId string, ws *websocket.Conn) {
+func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 	// why is this lock causing so many problems?
 	// adding it here or in notifyRoomOfJoin makes it so that only the first user joins the room, and no subsequent room joins (on page load) work
 	// s.mu.Lock()
@@ -146,6 +146,8 @@ func (s *Server) broadcastToRoom(b []byte, roomId string) {
 type ContentType string
 
 const JoinRoomType ContentType = "join"
+const LeaveRoomType ContentType = "leave"
+const MessageType ContentType = "message"
 
 func (s *Server) readLoop(ws *websocket.Conn) {
 	buf := make([]byte, 1024)
@@ -162,26 +164,67 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 
 		msg := buf[:n]
 
-		// var request struct {
-		// 	Type    ContentType `json:"type"`
-		// 	Content interface{} `json:"content"`
-		// }
+		var request struct {
+			Type    ContentType `json:"type"`
+			Content interface{} `json:"content"`
+		}
 		// type JoinRoomContent struct {
 		// 	RoomIds []string `json:"roomIds"`
 		// }
-		var request map[string]string
 		if err := json.Unmarshal(msg, &request); err != nil {
-			fmt.Println("Error unmarshalling message:", err)
-			continue
+			fmt.Println("Error unmarshalling message: ", err)
 		}
-		// switch request.Type {
-		switch request["type"] {
-		case "join":
-			s.addUserToRoom(request["userId"], request["roomId"], ws)
-		case "leave":
-			s.leaveRoom(request["roomId"], request["userId"])
-		case "message":
-			s.sendMessage(request["content"], request["destination"])
+		content, ok := request.Content.(map[string]interface{})
+
+		if ok {
+			switch request.Type {
+			case MessageType:
+				text, textExists := content["text"]
+				destination, destinationExists := content["destination"]
+				textStr, textIsString := text.(string)
+				destinationStr, destinationIsString := destination.(string)
+
+				if !textExists || !destinationExists {
+					fmt.Println("Payload missing required parameters for message type")
+					return
+				}
+				if !textIsString || !destinationIsString {
+					fmt.Println("text or destination is not a string")
+					return
+				}
+				s.sendMessage(textStr, destinationStr)
+
+			case LeaveRoomType:
+				roomId, roomIdExists := content["roomId"]
+				roomIdStr, roomIdIsString := roomId.(string)
+				userId, userIdExists := content["userId"]
+				userIdStr, userIdIsString := userId.(string)
+
+				if !userIdExists || !roomIdExists {
+					fmt.Println("Payload missing params")
+					return
+				}
+				if !roomIdIsString || !userIdIsString {
+					fmt.Println("Not a string")
+					return
+				}
+				s.leaveRoom(roomIdStr, userIdStr)
+			
+			case JoinRoomType:
+				roomId, roomIdExists := content["roomId"]
+				roomIdStr, roomIdIsString := roomId.(string)
+				userId, userIdExists := content["userId"]
+				userIdStr, userIdIsString := userId.(string)
+				if !roomIdIsString || !userIdIsString {
+					fmt.Println("Not a string")
+					return
+				}
+				if !userIdExists || !roomIdExists {
+					fmt.Println("No user id in payload")
+					return
+				}
+				s.joinRoom(userIdStr, roomIdStr, ws)
+			}
 		}
 	}
 }
@@ -189,8 +232,8 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 func (s *Server) handleWs(ws *websocket.Conn) {
 	query := ws.Request().URL.Query()
 	userId := query.Get("userId")
-	// roomId := query.Get("roomId")
-	// validation logic for not having userId/roomId
+
+	// validation logic for not having userId
 	if userId == "" {
 		// you can only attempt to push a message down (dunno if that will work), or shut down the connection
 		// maybe do both
