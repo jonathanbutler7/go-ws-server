@@ -14,7 +14,7 @@ import (
 )
 
 var goPath = os.Getenv("GOPATH")
-var isLikelyLocal = goPath != ""
+var shouldLog = goPath == ""
 
 var db *sql.DB
 
@@ -98,20 +98,21 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 }
 
 func (s *Server) logAction(userId, action, roomId, message string) {
-	if !isLikelyLocal {
-		return
-	}
-	_, err := db.Exec(`
-	INSERT INTO audit_logs (
-		user_id, action_type, room_id, message
-	) 
-	VALUES (
-	 	$1, $2, $3, $4
-	 )`,
-		userId, action, roomId, message)
+	if shouldLog {
+		_, err := db.Exec(`
+		INSERT INTO audit_logs (
+			user_id, action_type, room_id, message
+		) 
+		VALUES (
+			 $1, $2, $3, $4
+		 )`,
+			userId, action, roomId, message)
 
-	if err != nil {
-		fmt.Printf("Failed to insert join audit log for user %s in room %s: %v", userId, roomId, err)
+		if err != nil {
+			fmt.Printf("Failed to insert join audit log for user %s in room %s: %v", userId, roomId, err)
+		}
+	} else {
+		return
 	}
 }
 
@@ -142,35 +143,23 @@ func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 		}
 		s.mu.Unlock()
 	}
-	s.logAction(userId, "join", roomId, "")
-	s.notifyRoomOfJoin(roomId, userId)
-}
+	content := fmt.Sprintf("%s joined room %s", userId, roomId)
 
-func (s *Server) notifyRoomOfJoin(roomId, userId string) {
-	message := Message{
-		Content: fmt.Sprintf("%s joined room %s", userId, roomId),
+	s.logAction(userId, "join", roomId, content)
+	s.broadcastToRoom(Message{
+		Content: content,
 		Type:    "join",
-	}
-	s.broadcastToRoom(message, roomId)
+	}, roomId)
 }
 
 func (s *Server) leaveRoom(roomId, userId string) {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
 		delete(s.chatRooms[roomId], userId)
-		message := Message{
+		s.broadcastToRoom(Message{
 			Content: fmt.Sprintf("%s left room %s", userId, roomId),
 			Type:    "leave",
-		}
-		s.broadcastToRoom(message, roomId)
+		}, roomId)
 	}
-}
-
-func (s *Server) sendMessage(content, roomId string) {
-	message := Message{
-		Content: content,
-		Type:    "message",
-	}
-	s.broadcastToRoom(message, roomId)
 }
 
 func (s *Server) broadcastToRoom(message Message, roomId string) {
@@ -229,7 +218,11 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 				fmt.Println("Error unmarshalling message: ", err)
 				continue
 			}
-			s.sendMessage(message.Text, message.Destination)
+
+			s.broadcastToRoom(Message{
+				Content: message.Text,
+				Type:    "message",
+			}, message.Destination)
 
 		case LeaveRoomType:
 			var leaveContent LeaveRoomContent
@@ -291,7 +284,7 @@ func (s *Server) handleWs(ws *websocket.Conn) {
 }
 
 func main() {
-	if isLikelyLocal {
+	if shouldLog {
 		initDB()
 	}
 	server := NewServer()
