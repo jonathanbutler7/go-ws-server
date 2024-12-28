@@ -11,7 +11,7 @@ then i expanded it to handle
 in the future i would like to add
 
 - [x] a more efficient broadcast to room algorithm (avoid nested for loops)
-- [ ] store data somewhere
+- [x] store data somewhere
   - [x] audit log in postgres would be a good place to start (easy)
 - [ ] integrate nsq or kafka (or redis)
   - [ ] use case: multiple servers running
