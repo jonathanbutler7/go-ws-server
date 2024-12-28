@@ -39,3 +39,7 @@ socket.send(JSON.stringify({
   content: "oh hi"
 }))
 ```
+
+SQL Error [42501]: ERROR: permission denied for tablespace pg_default
+ERROR: permission denied for tablespace pg_default
+ERROR: permission denied for tablespace pg_default

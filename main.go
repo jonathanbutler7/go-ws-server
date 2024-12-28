@@ -1,14 +1,32 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	_ "github.com/lib/pq"
 	"io"
 	"net/http"
 	"sync"
 
 	"golang.org/x/net/websocket"
 )
+
+var db *sql.DB
+
+func initDB() {
+	var err error
+	db, err = sql.Open("postgres", "user=jonathanbutler dbname=wsauditlog sslmode=disable")
+	if err != nil {
+		fmt.Println(err)
+	}
+	// Test connection
+	if err := db.Ping(); err != nil {
+		fmt.Println(err)
+	} else {
+		fmt.Println("Successfully connected to db ✅")
+	}
+}
 
 type Server struct {
 	mu        sync.Mutex
@@ -75,6 +93,21 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 	}
 }
 
+func (s *Server) logAction(userId, action, roomId, message string) {
+	_, err := db.Exec(`
+	INSERT INTO audit_logs (
+		user_id, action_type, room_id, message
+	) 
+	VALUES (
+	 	$1, $2, $3, $4
+	 )`,
+		userId, action, roomId, message)
+	
+		if err != nil {
+		fmt.Printf("Failed to insert join audit log for user %s in room %s: %v", userId, roomId, err)
+	}
+}
+
 func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 	// if we don't have the room that the user wants to join, add it
 	if _, exists := s.chatRooms[roomId]; !exists {
@@ -102,6 +135,11 @@ func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 		}
 		s.mu.Unlock()
 	}
+	s.logAction(userId, "join", roomId, "")
+	// _, err := db.Exec("INSERT INTO audit_logs (user_id, action_type, room_id) VALUES ($1, $2, $3)", userId, "join", roomId)
+	// if err != nil {
+	//     fmt.Printf("Failed to insert join audit log for user %s in room %s: %v", userId, roomId, err)
+	// }
 	s.notifyRoomOfJoin(roomId, userId)
 }
 
@@ -110,12 +148,7 @@ func (s *Server) notifyRoomOfJoin(roomId, userId string) {
 		Content: fmt.Sprintf("%s joined room %s", userId, roomId),
 		Type:    "join",
 	}
-	jsonBytes, err := json.Marshal(message)
-	if err != nil {
-		fmt.Println("Error marshaling struct:", err)
-		return
-	}
-	s.broadcastToRoom(jsonBytes, roomId)
+	s.broadcastToRoom(message, roomId)
 }
 
 func (s *Server) leaveRoom(roomId, userId string) {
@@ -125,12 +158,7 @@ func (s *Server) leaveRoom(roomId, userId string) {
 			Content: fmt.Sprintf("%s left room %s", userId, roomId),
 			Type:    "leave",
 		}
-		jsonBytes, err := json.Marshal(message)
-		if err != nil {
-			fmt.Println("Error marshaling struct:", err)
-			return
-		}
-		s.broadcastToRoom(jsonBytes, roomId)
+		s.broadcastToRoom(message, roomId)
 	}
 }
 
@@ -139,15 +167,10 @@ func (s *Server) sendMessage(content, roomId string) {
 		Content: content,
 		Type:    "message",
 	}
-	jsonBytes, err := json.Marshal(message)
-	if err != nil {
-		fmt.Println("Error marshaling struct:", err)
-		return
-	}
-	s.broadcastToRoom(jsonBytes, roomId)
+	s.broadcastToRoom(message, roomId)
 }
 
-func (s *Server) broadcastToRoom(b []byte, roomId string) {
+func (s *Server) broadcastToRoom(message Message, roomId string) {
 	s.mu.Lock()
 	roomUsers, exists := s.chatRooms[roomId]
 	s.mu.Unlock()
@@ -160,8 +183,14 @@ func (s *Server) broadcastToRoom(b []byte, roomId string) {
 		s.mu.Unlock()
 		if foundUser && user.conn != nil {
 			go func(ws *websocket.Conn) {
+				s.logAction(userId, message.Type, roomId, message.Content)
+				b, err := json.Marshal(message)
+				if err != nil {
+					fmt.Println("Error marshaling struct: ", err)
+					return
+				}
 				if _, err := ws.Write(b); err != nil {
-					fmt.Println("error", err)
+					fmt.Println("error writing to socket", err)
 				}
 			}(user.conn)
 		}
@@ -180,7 +209,6 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 			fmt.Println("read error: ", err)
 			continue
 		}
-		fmt.Println("n: ", n)
 		msg := buf[:n]
 
 		var baseMsg struct {
@@ -260,6 +288,7 @@ func (s *Server) handleWs(ws *websocket.Conn) {
 }
 
 func main() {
+	initDB()
 	server := NewServer()
 	http.Handle("/ws/", websocket.Handler(server.handleWs))
 	http.ListenAndServe(":3000", nil)
