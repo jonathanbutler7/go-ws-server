@@ -37,16 +37,17 @@ to see the "chat" work, open up 2 consoles in a browser and run
 let socket = new WebSocket("ws://localhost:3000/ws/?userId=123");
 socket.onmessage = (event) => console.log(event.data);
 // use socket.send to send chat messages between the two connections
-const joinMessage = {
-  type: "join",
-  content: {
-    userId: "123",
-    roomId: "A",
-  },
-};
 socket.onopen = () => {
   // join a room with the user
-  socket.send(JSON.stringify(joinMessage));
+  socket.send(
+    JSON.stringify({
+      type: "join",
+      content: {
+        userId: "123",
+        roomId: "A",
+      },
+    })
+  );
 
   // send a message to that room
   socket.send(
