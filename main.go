@@ -21,6 +21,27 @@ type userInfo struct {
 	conn  *websocket.Conn
 }
 
+type ContentType string
+
+const JoinRoomType ContentType = "join"
+const LeaveRoomType ContentType = "leave"
+const MessageType ContentType = "message"
+
+type JoinRoomContent struct {
+	UserId string `json:"userId"`
+	RoomId string `json:"roomId"`
+}
+
+type LeaveRoomContent struct {
+	UserId string `json:"userId"`
+	RoomId string `json:"roomId"`
+}
+
+type MessageContent struct {
+	Text        string `json:"text"`
+	Destination string `json:"destination"`
+}
+
 // how does one user have multiple ws connected?
 type Message struct {
 	Type    string `json:"type"`
@@ -128,39 +149,23 @@ func (s *Server) sendMessage(content, roomId string) {
 
 func (s *Server) broadcastToRoom(b []byte, roomId string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if roomUsers, exists := s.chatRooms[roomId]; exists {
-		for userId := range roomUsers {
-			if user, ok := s.users[userId]; ok && user.conn != nil {
-				go func(ws *websocket.Conn) {
-					if _, err := ws.Write(b); err != nil {
-						fmt.Println("error", err)
-					}
-				}(user.conn)
-			}
+	roomUsers, exists := s.chatRooms[roomId]
+	s.mu.Unlock()
+	if !exists {
+		return
+	}
+	for userId := range roomUsers {
+		s.mu.Lock()
+		user, foundUser := s.users[userId]
+		s.mu.Unlock()
+		if foundUser && user.conn != nil {
+			go func(ws *websocket.Conn) {
+				if _, err := ws.Write(b); err != nil {
+					fmt.Println("error", err)
+				}
+			}(user.conn)
 		}
 	}
-}
-
-type ContentType string
-
-const JoinRoomType ContentType = "join"
-const LeaveRoomType ContentType = "leave"
-const MessageType ContentType = "message"
-
-type JoinRoomContent struct {
-	UserId string `json:"userId"`
-	RoomId string `json:"roomId"`
-}
-
-type LeaveRoomContent struct {
-	UserId string `json:"userId"`
-	RoomId string `json:"roomId"`
-}
-
-type MessageContent struct {
-	Text        string `json:"text"`
-	Destination string `json:"destination"`
 }
 
 func (s *Server) readLoop(ws *websocket.Conn) {
@@ -175,7 +180,7 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 			fmt.Println("read error: ", err)
 			continue
 		}
-
+		fmt.Println("n: ", n)
 		msg := buf[:n]
 
 		var baseMsg struct {
