@@ -18,20 +18,6 @@ var shouldLog = goPath == ""
 
 var db *sql.DB
 
-func initDB() {
-	var err error
-	db, err = sql.Open("postgres", "user=jonathanbutler dbname=wsauditlog sslmode=disable")
-	if err != nil {
-		fmt.Println(err)
-	}
-	// Test connection
-	if err := db.Ping(); err != nil {
-		fmt.Println(err)
-	} else {
-		fmt.Println("Successfully connected to db ✅")
-	}
-}
-
 type Server struct {
 	mu        sync.Mutex
 	chatRooms map[string]map[string]struct{} // roomID -> (userID -> empty struct)
@@ -70,30 +56,17 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-func NewServer() *Server {
-	return &Server{
-		chatRooms: make(map[string]map[string]struct{}),
-		users:     make(map[string]userInfo),
+func initDB() {
+	var err error
+	db, err = sql.Open("postgres", "user=jonathanbutler dbname=wsauditlog sslmode=disable")
+	if err != nil {
+		fmt.Println(err)
 	}
-}
-
-// "*" makes it a pointer receiver
-// makes it so we modify the original connections map, not a copy
-func (s *Server) addConnection(ws *websocket.Conn, userId string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.users[userId]; exists {
-		// If the user already exists, just update the connection, and keep existing rooms
-		user := s.users[userId]
-		user.conn = ws
-		s.users[userId] = user
+	// Test connection
+	if err := db.Ping(); err != nil {
+		fmt.Println(err)
 	} else {
-		// If this is a new user, create a new userInfo entry
-		s.users[userId] = userInfo{
-			conn:  ws,
-			rooms: []string{}, // Initialize with empty rooms slice
-		}
+		fmt.Println("Successfully connected to db ✅")
 	}
 }
 
@@ -124,7 +97,34 @@ func (s *Server) logAction(userId, action, roomId, message string) {
 	}
 }
 
-func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
+func NewServer() *Server {
+	return &Server{
+		chatRooms: make(map[string]map[string]struct{}),
+		users:     make(map[string]userInfo),
+	}
+}
+
+// "*" makes it a pointer receiver
+// makes it so we modify the original connections map, not a copy
+func (s *Server) addConnection(ws *websocket.Conn, userId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.users[userId]; exists {
+		// If the user already exists, just update the connection, and keep existing rooms
+		user := s.users[userId]
+		user.conn = ws
+		s.users[userId] = user
+	} else {
+		// If this is a new user, create a new userInfo entry
+		s.users[userId] = userInfo{
+			conn:  ws,
+			rooms: []string{}, // Initialize with empty rooms slice
+		}
+	}
+}
+
+func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) bool {
 	// if we don't have the room that the user wants to join, add it
 	if _, exists := s.chatRooms[roomId]; !exists {
 		s.mu.Lock()
@@ -151,23 +151,15 @@ func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 		}
 		s.mu.Unlock()
 	}
-
-	content := fmt.Sprintf("%s joined room %s", userId, roomId)
-	s.broadcastMessageToRoom(Message{
-		Content: content,
-		Type:    "join",
-	}, roomId)
+	return true
 }
 
-func (s *Server) leaveRoom(roomId, userId string) {
+func (s *Server) leaveRoom(roomId, userId string) bool {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
 		delete(s.chatRooms[roomId], userId)
-		content := fmt.Sprintf("%s left room %s", userId, roomId)
-		s.broadcastMessageToRoom(Message{
-			Content: content,
-			Type:    "leave",
-		}, roomId)
+		return true
 	}
+	return false
 }
 
 func (s *Server) broadcastMessageToRoom(message Message, roomId string) {
@@ -209,17 +201,18 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 			fmt.Println("read error: ", err)
 			continue
 		}
-		msg := buf[:n]
+		msgBytes := buf[:n]
 
 		var baseMsg struct {
 			Type    ContentType     `json:"type"`
 			Content json.RawMessage `json:"content"`
 		}
-		if err := json.Unmarshal(msg, &baseMsg); err != nil {
+		if err := json.Unmarshal(msgBytes, &baseMsg); err != nil {
 			fmt.Println("Error unmarshalling base message: ", err)
 		}
 
 		switch baseMsg.Type {
+
 		case MessageType:
 			var message MessageContent
 			if err := json.Unmarshal(baseMsg.Content, &message); err != nil {
@@ -238,7 +231,14 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 				fmt.Println("Error unmarshalling leave message: ", err)
 				continue
 			}
-			s.leaveRoom(leaveContent.RoomId, leaveContent.UserId)
+			success := s.leaveRoom(leaveContent.RoomId, leaveContent.UserId)
+			if success {
+				content := fmt.Sprintf("%s left room %s", leaveContent.UserId, leaveContent.RoomId)
+				s.broadcastMessageToRoom(Message{
+					Content: content,
+					Type:    "leave",
+				}, leaveContent.RoomId)
+			}
 
 		case JoinRoomType:
 			var joinContent JoinRoomContent
@@ -246,9 +246,13 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 				fmt.Println("Error unmarshalling join message: ", err)
 				continue
 			}
-			s.joinRoom(joinContent.UserId, joinContent.RoomId, ws)
+			if success := s.joinRoom(joinContent.UserId, joinContent.RoomId, ws); success {
+				s.broadcastMessageToRoom(Message{
+					Content: fmt.Sprintf("%s joined room %s", joinContent.UserId, joinContent.RoomId),
+					Type:    "join",
+				}, joinContent.RoomId)
+			}
 		}
-
 	}
 }
 
