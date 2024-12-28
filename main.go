@@ -55,37 +55,36 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 }
 
 func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
-	// why is this lock causing so many problems?
-	// adding it here or in notifyRoomOfJoin makes it so that only the first user joins the room, and no subsequent room joins (on page load) work
-	// s.mu.Lock()
-	// defer s.mu.Unlock()
 	// if we don't have the room that the user wants to join, add it
 	if _, exists := s.chatRooms[roomId]; !exists {
+		s.mu.Lock()
 		s.chatRooms[roomId] = make(map[string]struct{})
+		s.mu.Unlock()
 	}
 	s.chatRooms[roomId][userId] = struct{}{}
 
 	if user, exists := s.users[userId]; exists {
+		s.mu.Lock()
 		user.rooms = append(user.rooms, roomId)
 		// Ensure the connection is set if it's not already or if it's a new connection for this user
 		if user.conn == nil {
 			user.conn = ws
 		}
 		s.users[userId] = user
+		s.mu.Unlock()
 	} else {
 		// If the user does not exist, create a new userInfo with this room
+		s.mu.Lock()
 		s.users[userId] = userInfo{
 			rooms: []string{roomId},
 			conn:  ws,
 		}
+		s.mu.Unlock()
 	}
 	s.notifyRoomOfJoin(roomId, userId)
 }
 
 func (s *Server) notifyRoomOfJoin(roomId, userId string) {
-	// why is this lock causing problems?
-	// s.mu.Lock()
-	// defer s.mu.Unlock()
 	message := Message{
 		Content: fmt.Sprintf("%s joined room %s", userId, roomId),
 		Type:    "join",
