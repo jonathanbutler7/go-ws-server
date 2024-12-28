@@ -100,19 +100,27 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 func (s *Server) logAction(userId, action, roomId, message string) {
 	if shouldLog {
 		_, err := db.Exec(`
-		INSERT INTO audit_logs (
-			user_id, action_type, room_id, message
-		) 
-		VALUES (
-			 $1, $2, $3, $4
-		 )`,
-			userId, action, roomId, message)
+			INSERT INTO audit_logs (
+				user_id, 
+				action_type, 
+				room_id, 
+				message
+			) 
+			VALUES (
+				$1, 
+				$2, 
+				$3, 
+				$4
+			);`,
+			userId, action, roomId, message,
+		)
 
 		if err != nil {
-			fmt.Printf("Failed to insert join audit log for user %s in room %s: %v", userId, roomId, err)
+			fmt.Printf(
+				"Failed to insert join audit log for user %s in room %s: %v",
+				userId, roomId, err,
+			)
 		}
-	} else {
-		return
 	}
 }
 
@@ -143,10 +151,9 @@ func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 		}
 		s.mu.Unlock()
 	}
-	content := fmt.Sprintf("%s joined room %s", userId, roomId)
 
-	s.logAction(userId, "join", roomId, content)
-	s.broadcastToRoom(Message{
+	content := fmt.Sprintf("%s joined room %s", userId, roomId)
+	s.broadcastMessageToRoom(Message{
 		Content: content,
 		Type:    "join",
 	}, roomId)
@@ -155,14 +162,15 @@ func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 func (s *Server) leaveRoom(roomId, userId string) {
 	if _, exists := s.chatRooms[roomId][userId]; exists {
 		delete(s.chatRooms[roomId], userId)
-		s.broadcastToRoom(Message{
-			Content: fmt.Sprintf("%s left room %s", userId, roomId),
+		content := fmt.Sprintf("%s left room %s", userId, roomId)
+		s.broadcastMessageToRoom(Message{
+			Content: content,
 			Type:    "leave",
 		}, roomId)
 	}
 }
 
-func (s *Server) broadcastToRoom(message Message, roomId string) {
+func (s *Server) broadcastMessageToRoom(message Message, roomId string) {
 	s.mu.Lock()
 	roomUsers, exists := s.chatRooms[roomId]
 	s.mu.Unlock()
@@ -178,7 +186,7 @@ func (s *Server) broadcastToRoom(message Message, roomId string) {
 				s.logAction(userId, message.Type, roomId, message.Content)
 				b, err := json.Marshal(message)
 				if err != nil {
-					fmt.Println("Error marshaling struct: ", err)
+					fmt.Println("Error marshalling struct: ", err)
 					return
 				}
 				if _, err := ws.Write(b); err != nil {
@@ -219,7 +227,7 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 				continue
 			}
 
-			s.broadcastToRoom(Message{
+			s.broadcastMessageToRoom(Message{
 				Content: message.Text,
 				Type:    "message",
 			}, message.Destination)
