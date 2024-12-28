@@ -23,8 +23,8 @@ type userInfo struct {
 
 // how does one user have multiple ws connected?
 type Message struct {
-	Content string `json:"content"`
 	Type    string `json:"type"`
+	Content string `json:"content"`
 }
 
 func NewServer() *Server {
@@ -149,6 +149,21 @@ const JoinRoomType ContentType = "join"
 const LeaveRoomType ContentType = "leave"
 const MessageType ContentType = "message"
 
+type JoinRoomContent struct {
+	UserId string `json:"userId"`
+	RoomId string `json:"roomId"`
+}
+
+type LeaveRoomContent struct {
+	UserId string `json:"userId"`
+	RoomId string `json:"roomId"`
+}
+
+type MessageContent struct {
+	Text        string `json:"text"`
+	Destination string `json:"destination"`
+}
+
 func (s *Server) readLoop(ws *websocket.Conn) {
 	buf := make([]byte, 1024)
 	for {
@@ -164,68 +179,40 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 
 		msg := buf[:n]
 
-		var request struct {
-			Type    ContentType `json:"type"`
-			Content interface{} `json:"content"`
+		var baseMsg struct {
+			Type    ContentType     `json:"type"`
+			Content json.RawMessage `json:"content"`
 		}
-		// type JoinRoomContent struct {
-		// 	RoomIds []string `json:"roomIds"`
-		// }
-		if err := json.Unmarshal(msg, &request); err != nil {
-			fmt.Println("Error unmarshalling message: ", err)
+		if err := json.Unmarshal(msg, &baseMsg); err != nil {
+			fmt.Println("Error unmarshalling base message: ", err)
 		}
-		content, ok := request.Content.(map[string]interface{})
 
-		if ok {
-			switch request.Type {
-			case MessageType:
-				text, textExists := content["text"]
-				destination, destinationExists := content["destination"]
-				textStr, textIsString := text.(string)
-				destinationStr, destinationIsString := destination.(string)
-
-				if !textExists || !destinationExists {
-					fmt.Println("Payload missing required parameters for message type")
-					return
-				}
-				if !textIsString || !destinationIsString {
-					fmt.Println("text or destination is not a string")
-					return
-				}
-				s.sendMessage(textStr, destinationStr)
-
-			case LeaveRoomType:
-				roomId, roomIdExists := content["roomId"]
-				roomIdStr, roomIdIsString := roomId.(string)
-				userId, userIdExists := content["userId"]
-				userIdStr, userIdIsString := userId.(string)
-
-				if !userIdExists || !roomIdExists {
-					fmt.Println("Payload missing params")
-					return
-				}
-				if !roomIdIsString || !userIdIsString {
-					fmt.Println("Not a string")
-					return
-				}
-				s.leaveRoom(roomIdStr, userIdStr)
-			
-			case JoinRoomType:
-				roomId, roomIdExists := content["roomId"]
-				roomIdStr, roomIdIsString := roomId.(string)
-				userId, userIdExists := content["userId"]
-				userIdStr, userIdIsString := userId.(string)
-				if !roomIdIsString || !userIdIsString {
-					fmt.Println("Not a string")
-					return
-				}
-				if !userIdExists || !roomIdExists {
-					fmt.Println("No user id in payload")
-					return
-				}
-				s.joinRoom(userIdStr, roomIdStr, ws)
+		switch baseMsg.Type {
+		case MessageType:
+			var message MessageContent
+			if err := json.Unmarshal(baseMsg.Content, &message); err != nil {
+				fmt.Println("Error unmarshalling message: ", err)
+				continue
 			}
+			s.sendMessage(message.Text, message.Destination)
+
+		case LeaveRoomType:
+			var leaveContent LeaveRoomContent
+			if err := json.Unmarshal(baseMsg.Content, &leaveContent); err != nil {
+				fmt.Println("Error unmarshalling leave message: ", err)
+				continue
+			}
+			s.leaveRoom(leaveContent.RoomId, leaveContent.UserId)
+
+		case JoinRoomType:
+			var joinContent JoinRoomContent
+			if err := json.Unmarshal(baseMsg.Content, &joinContent); err != nil {
+				fmt.Println("Error unmarshalling join message: ", err)
+				continue
+			}
+			s.joinRoom(joinContent.UserId, joinContent.RoomId, ws)
 		}
+
 	}
 }
 
