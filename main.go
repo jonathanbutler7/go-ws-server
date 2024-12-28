@@ -60,14 +60,12 @@ func initDB() {
 	var err error
 	db, err = sql.Open("postgres", "user=jonathanbutler dbname=wsauditlog sslmode=disable")
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Failed to initialize database: %v", err)
 	}
-	// Test connection
 	if err := db.Ping(); err != nil {
-		fmt.Println(err)
-	} else {
-		fmt.Println("Successfully connected to db ✅")
+		fmt.Printf("Database ping failed: %v", err)
 	}
+	fmt.Println("Successfully connected to db ✅")
 }
 
 func (s *Server) logAction(userId, action, roomId, message string) {
@@ -174,7 +172,9 @@ func (s *Server) broadcastMessageToRoom(message Message, roomId string) {
 		user, foundUser := s.users[userId]
 		s.mu.Unlock()
 		if foundUser && user.conn != nil {
-			go func(ws *websocket.Conn) {
+			// Capture the necessary variables explicitly
+			conn := user.conn // Copy the connection to avoid race conditions
+			go func(userId, roomId string, ws *websocket.Conn) {
 				s.logAction(userId, message.Type, roomId, message.Content)
 				b, err := json.Marshal(message)
 				if err != nil {
@@ -184,9 +184,49 @@ func (s *Server) broadcastMessageToRoom(message Message, roomId string) {
 				if _, err := ws.Write(b); err != nil {
 					fmt.Println("error writing to socket", err)
 				}
-			}(user.conn)
+			}(userId, roomId, conn)
 		}
 	}
+}
+
+func (s *Server) handleJoin(content json.RawMessage, ws *websocket.Conn) {
+	var joinContent JoinRoomContent
+	if err := json.Unmarshal(content, &joinContent); err != nil {
+		fmt.Println("Error unmarshalling join message: ", err)
+	}
+	if success := s.joinRoom(joinContent.UserId, joinContent.RoomId, ws); success {
+		s.broadcastMessageToRoom(Message{
+			Content: fmt.Sprintf("%s joined room %s", joinContent.UserId, joinContent.RoomId),
+			Type:    "join",
+		}, joinContent.RoomId)
+	}
+}
+
+func (s *Server) handleLeave(content json.RawMessage) {
+	var leaveContent LeaveRoomContent
+	if err := json.Unmarshal(content, &leaveContent); err != nil {
+		fmt.Println("Error unmarshalling leave message: ", err)
+	}
+	success := s.leaveRoom(leaveContent.RoomId, leaveContent.UserId)
+	if success {
+		content := fmt.Sprintf("%s left room %s", leaveContent.UserId, leaveContent.RoomId)
+		s.broadcastMessageToRoom(Message{
+			Content: content,
+			Type:    "leave",
+		}, leaveContent.RoomId)
+	}
+}
+
+func (s *Server) handleMessage(content json.RawMessage) {
+	var message MessageContent
+	if err := json.Unmarshal(content, &message); err != nil {
+		fmt.Println("Error unmarshalling message: ", err)
+	}
+
+	s.broadcastMessageToRoom(Message{
+		Content: message.Text,
+		Type:    "message",
+	}, message.Destination)
 }
 
 func (s *Server) readLoop(ws *websocket.Conn) {
@@ -212,46 +252,12 @@ func (s *Server) readLoop(ws *websocket.Conn) {
 		}
 
 		switch baseMsg.Type {
-
 		case MessageType:
-			var message MessageContent
-			if err := json.Unmarshal(baseMsg.Content, &message); err != nil {
-				fmt.Println("Error unmarshalling message: ", err)
-				continue
-			}
-
-			s.broadcastMessageToRoom(Message{
-				Content: message.Text,
-				Type:    "message",
-			}, message.Destination)
-
+			s.handleMessage(baseMsg.Content)
 		case LeaveRoomType:
-			var leaveContent LeaveRoomContent
-			if err := json.Unmarshal(baseMsg.Content, &leaveContent); err != nil {
-				fmt.Println("Error unmarshalling leave message: ", err)
-				continue
-			}
-			success := s.leaveRoom(leaveContent.RoomId, leaveContent.UserId)
-			if success {
-				content := fmt.Sprintf("%s left room %s", leaveContent.UserId, leaveContent.RoomId)
-				s.broadcastMessageToRoom(Message{
-					Content: content,
-					Type:    "leave",
-				}, leaveContent.RoomId)
-			}
-
+			s.handleLeave(baseMsg.Content)
 		case JoinRoomType:
-			var joinContent JoinRoomContent
-			if err := json.Unmarshal(baseMsg.Content, &joinContent); err != nil {
-				fmt.Println("Error unmarshalling join message: ", err)
-				continue
-			}
-			if success := s.joinRoom(joinContent.UserId, joinContent.RoomId, ws); success {
-				s.broadcastMessageToRoom(Message{
-					Content: fmt.Sprintf("%s joined room %s", joinContent.UserId, joinContent.RoomId),
-					Type:    "join",
-				}, joinContent.RoomId)
-			}
+			s.handleJoin(baseMsg.Content, ws)
 		}
 	}
 }
