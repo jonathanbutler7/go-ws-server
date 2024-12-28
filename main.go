@@ -64,14 +64,14 @@ func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 	s.chatRooms[roomId][userId] = struct{}{}
 
 	if user, exists := s.users[userId]; exists {
-		s.mu.Lock()
+		// s.mu.Lock()
 		user.rooms = append(user.rooms, roomId)
 		// Ensure the connection is set if it's not already or if it's a new connection for this user
 		if user.conn == nil {
 			user.conn = ws
 		}
 		s.users[userId] = user
-		s.mu.Unlock()
+		// s.mu.Unlock()
 	} else {
 		// If the user does not exist, create a new userInfo with this room
 		s.mu.Lock()
