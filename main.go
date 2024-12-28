@@ -7,10 +7,14 @@ import (
 	_ "github.com/lib/pq"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 
 	"golang.org/x/net/websocket"
 )
+
+var goPath = os.Getenv("GOPATH")
+var isLikelyLocal = goPath != ""
 
 var db *sql.DB
 
@@ -94,6 +98,9 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 }
 
 func (s *Server) logAction(userId, action, roomId, message string) {
+	if !isLikelyLocal {
+		return
+	}
 	_, err := db.Exec(`
 	INSERT INTO audit_logs (
 		user_id, action_type, room_id, message
@@ -102,8 +109,8 @@ func (s *Server) logAction(userId, action, roomId, message string) {
 	 	$1, $2, $3, $4
 	 )`,
 		userId, action, roomId, message)
-	
-		if err != nil {
+
+	if err != nil {
 		fmt.Printf("Failed to insert join audit log for user %s in room %s: %v", userId, roomId, err)
 	}
 }
@@ -136,10 +143,6 @@ func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) {
 		s.mu.Unlock()
 	}
 	s.logAction(userId, "join", roomId, "")
-	// _, err := db.Exec("INSERT INTO audit_logs (user_id, action_type, room_id) VALUES ($1, $2, $3)", userId, "join", roomId)
-	// if err != nil {
-	//     fmt.Printf("Failed to insert join audit log for user %s in room %s: %v", userId, roomId, err)
-	// }
 	s.notifyRoomOfJoin(roomId, userId)
 }
 
@@ -288,7 +291,9 @@ func (s *Server) handleWs(ws *websocket.Conn) {
 }
 
 func main() {
-	initDB()
+	if isLikelyLocal {
+		initDB()
+	}
 	server := NewServer()
 	http.Handle("/ws/", websocket.Handler(server.handleWs))
 	http.ListenAndServe(":3000", nil)
