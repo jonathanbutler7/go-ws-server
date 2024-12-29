@@ -1,0 +1,134 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"golang.org/x/net/websocket"
+)
+
+func (s *Server) handleLeave(content json.RawMessage) {
+	var leaveContent LeaveRoomContent
+	if err := json.Unmarshal(content, &leaveContent); err != nil {
+		fmt.Println("Error unmarshalling leave message: ", err)
+	}
+	success := s.leaveRoom(leaveContent.RoomId, leaveContent.UserId)
+	if success {
+		content := fmt.Sprintf("%s left room %s", leaveContent.UserId, leaveContent.RoomId)
+		s.broadcastMessageToRoom(Message{
+			Content: content,
+			Type:    "leave",
+		}, leaveContent.RoomId)
+	}
+}
+
+func (s *Server) handleMessage(content json.RawMessage) {
+	var message MessageContent
+	if err := json.Unmarshal(content, &message); err != nil {
+		fmt.Println("Error unmarshalling message: ", err)
+	}
+
+	s.broadcastMessageToRoom(Message{
+		Content: message.Text,
+		Type:    "message",
+	}, message.Destination)
+}
+
+func (s *Server) handleJoin(content json.RawMessage, ws *websocket.Conn) {
+	var joinContent JoinRoomContent
+	if err := json.Unmarshal(content, &joinContent); err != nil {
+		fmt.Println("Error unmarshalling join message: ", err)
+	}
+	if success := s.joinRoom(joinContent.UserId, joinContent.RoomId, ws); success {
+		s.broadcastMessageToRoom(Message{
+			Content: fmt.Sprintf("%s joined room %s", joinContent.UserId, joinContent.RoomId),
+			Type:    "join",
+		}, joinContent.RoomId)
+	}
+}
+
+// "*" makes it a pointer receiver
+// makes it so we modify the original connections map, not a copy
+func (s *Server) addConnection(ws *websocket.Conn, userId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.users[userId]; exists {
+		// If the user already exists, just update the connection, and keep existing rooms
+		user := s.users[userId]
+		user.conn = ws
+		s.users[userId] = user
+	} else {
+		// If this is a new user, create a new userInfo entry
+		s.users[userId] = UserInfo{
+			conn:  ws,
+			rooms: []string{}, // Initialize with empty rooms slice
+		}
+	}
+}
+
+func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) bool {
+	// if we don't have the room that the user wants to join, add it
+	if _, exists := s.chatRooms[roomId]; !exists {
+		s.mu.Lock()
+		s.chatRooms[roomId] = make(map[string]struct{})
+		s.mu.Unlock()
+	}
+	s.chatRooms[roomId][userId] = struct{}{}
+
+	if user, exists := s.users[userId]; exists {
+		// s.mu.Lock()
+		user.rooms = append(user.rooms, roomId)
+		// Ensure the connection is set if it's not already or if it's a new connection for this user
+		if user.conn == nil {
+			user.conn = ws
+		}
+		s.users[userId] = user
+		// s.mu.Unlock()
+	} else {
+		// If the user does not exist, create a new userInfo with this room
+		s.mu.Lock()
+		s.users[userId] = UserInfo{
+			rooms: []string{roomId},
+			conn:  ws,
+		}
+		s.mu.Unlock()
+	}
+	return true
+}
+
+func (s *Server) leaveRoom(roomId, userId string) bool {
+	if _, exists := s.chatRooms[roomId][userId]; exists {
+		delete(s.chatRooms[roomId], userId)
+		return true
+	}
+	return false
+}
+
+func (s *Server) broadcastMessageToRoom(message Message, roomId string) {
+	s.mu.Lock()
+	roomUsers, exists := s.chatRooms[roomId]
+	s.mu.Unlock()
+	if !exists {
+		return
+	}
+	for userId := range roomUsers {
+		s.mu.Lock()
+		user, foundUser := s.users[userId]
+		s.mu.Unlock()
+		if foundUser && user.conn != nil {
+			// Capture the necessary variables explicitly
+			conn := user.conn // Copy the connection to avoid race conditions
+			go func(userId, roomId string, ws *websocket.Conn) {
+				s.LogAction(userId, message.Type, roomId, message.Content)
+				b, err := json.Marshal(message)
+				if err != nil {
+					fmt.Println("Error marshalling struct: ", err)
+					return
+				}
+				if _, err := ws.Write(b); err != nil {
+					fmt.Println("error writing to socket", err)
+				}
+			}(userId, roomId, conn)
+		}
+	}
+}
