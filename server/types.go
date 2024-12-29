@@ -1,9 +1,8 @@
 package server
 
 import (
-	"sync"
-
 	"golang.org/x/net/websocket"
+	"sync"
 )
 
 type Server struct {

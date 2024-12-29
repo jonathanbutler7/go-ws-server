@@ -3,9 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-
 	"golang.org/x/net/websocket"
+	"io"
 )
 
 func NewServer() *Server {
