@@ -8,7 +8,7 @@ import (
 )
 
 var goPath = os.Getenv("GOPATH")
-var ShouldLog = goPath == ""
+var ShouldLog = false
 
 var DB *sql.DB
 
@@ -20,8 +20,9 @@ func InitDB() {
 	}
 	if err := DB.Ping(); err != nil {
 		fmt.Printf("Database ping failed: %v", err)
+	} else {
+		fmt.Println("Successfully connected to db ✅")
 	}
-	fmt.Println("Successfully connected to db ✅")
 }
 
 func (s *Server) LogAction(userId, action, roomId, message string) {

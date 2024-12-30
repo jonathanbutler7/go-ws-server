@@ -9,6 +9,8 @@ type Server struct {
 	mu        sync.Mutex
 	chatRooms map[string]map[string]struct{} // roomID -> (userID -> empty struct)
 	users     map[string]UserInfo            // userID -> userInfo
+	// usersMutex   sync.Mutex
+	// could be helpful to have separate mutexes for separate maps
 }
 
 type UserInfo struct {

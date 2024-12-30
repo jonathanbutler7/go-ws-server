@@ -8,17 +8,22 @@ then i expanded it to handle
 - users can join/leave rooms
 - different websocket message types
 
-in the future i would like to add
+in the future i would like to add:
 
 - [x] a more efficient broadcast to room algorithm (avoid nested for loops)
 - [x] store data somewhere
   - [x] audit log in postgres would be a good place to start (easy)
 - [ ] integrate nsq or kafka (or redis)
   - [ ] use case: multiple servers running
-  - [ ] straightforward solution: publish every message to nsq
+  - [ ] straightforward solution: publish every message to nsq (1 topic per room probably)
   - [ ] reason for message bus is horizontal scaling
+- [ ] load test this
 
 i built an html page ui to showcase the connections working in the browser
+
+routes with nsq
+1. at most, 1 subscriber processes each message
+2. all subscribers should get this message and process it
 
 - https://jonathanbutler7.github.io/
 - the ui is kind of confusing if you think about it carefully

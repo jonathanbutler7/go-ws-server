@@ -76,31 +76,31 @@ func (s *Server) addConnection(ws *websocket.Conn, userId string) {
 
 func (s *Server) joinRoom(userId, roomId string, ws *websocket.Conn) bool {
 	// if we don't have the room that the user wants to join, add it
+	s.mu.Lock()
 	if _, exists := s.chatRooms[roomId]; !exists {
-		s.mu.Lock()
 		s.chatRooms[roomId] = make(map[string]struct{})
-		s.mu.Unlock()
 	}
 	s.chatRooms[roomId][userId] = struct{}{}
+	s.mu.Unlock()
 
+	s.mu.Lock()
 	if user, exists := s.users[userId]; exists {
-		// s.mu.Lock()
 		user.rooms = append(user.rooms, roomId)
 		// Ensure the connection is set if it's not already or if it's a new connection for this user
 		if user.conn == nil {
 			user.conn = ws
 		}
 		s.users[userId] = user
-		// s.mu.Unlock()
 	} else {
 		// If the user does not exist, create a new userInfo with this room
-		s.mu.Lock()
+		// s.mu.Lock()
 		s.users[userId] = UserInfo{
 			rooms: []string{roomId},
 			conn:  ws,
 		}
-		s.mu.Unlock()
+		// s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	return true
 }
 
@@ -115,17 +115,21 @@ func (s *Server) leaveRoom(roomId, userId string) bool {
 func (s *Server) broadcastMessageToRoom(message Message, roomId string) {
 	s.mu.Lock()
 	roomUsers, exists := s.chatRooms[roomId]
+	roomUsersCopy := roomUsers
 	s.mu.Unlock()
 	if !exists {
 		return
 	}
-	for userId := range roomUsers {
+	for userId := range roomUsersCopy {
 		s.mu.Lock()
 		user, foundUser := s.users[userId]
-		s.mu.Unlock()
+		var connection *websocket.Conn
 		if foundUser && user.conn != nil {
 			// Capture the necessary variables explicitly
-			conn := user.conn // Copy the connection to avoid race conditions
+			connection = user.conn // Copy the connection to avoid race conditions
+		}
+		s.mu.Unlock()
+		if connection != nil {
 			go func(userId, roomId string, ws *websocket.Conn) {
 				s.LogAction(userId, message.Type, roomId, message.Content)
 				b, err := json.Marshal(message)
@@ -136,7 +140,7 @@ func (s *Server) broadcastMessageToRoom(message Message, roomId string) {
 				if _, err := ws.Write(b); err != nil {
 					fmt.Println("error writing to socket", err)
 				}
-			}(userId, roomId, conn)
+			}(userId, roomId, connection)
 		}
 	}
 }
@@ -199,8 +203,7 @@ func (s *Server) HandleWs(ws *websocket.Conn) {
 		// will always run even if read loop freaks out
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		// remove ws connection and user
-		delete(s.users, userId)
+
 		// remove user from chat room
 		// check if user exists before attempting to access their rooms
 		if user, ok := s.users[userId]; ok {
